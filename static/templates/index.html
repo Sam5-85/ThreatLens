@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="card">
+    <h1>Training Inbox</h1>
+    <p class="muted">
+      Pick an email and decide what you would do. These are *simulated* examples used for awareness training.
+    </p>
+  </section>
+
+  <section class="grid">
+    {% for e in emails %}
+      <article class="email-card">
+        <div class="email-meta">
+          <div class="subject">{{ e.subject }}</div>
+          <div class="sender">{{ e.sender }}</div>
+        </div>
+        <p class="preview">{{ e.preview }}</p>
+        <div class="actions">
+          <a class="btn" href="{{ url_for('view_email', email_id=e.id) }}">Open email</a>
+        </div>
+      </article>
+    {% endfor %}
+  </section>
+{% endblock %}

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="card">
+    <h1>Your Results</h1>
+    <p class="score">Score: <strong>{{ last_score.score }}</strong> / {{ last_score.total }}</p>
+
+    <div class="actions">
+      <a class="btn" href="{{ url_for('quiz') }}">Retake quiz</a>
+      <a class="btn ghost" href="{{ url_for('index') }}">Back to inbox</a>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Review</h2>
+    <ol class="review">
+      {% for r in last_results %}
+        <li class="review-item">
+          <div class="q">{{ r.question }}</div>
+          <div class="muted small">
+            Your answer:
+            {% if r.user_choice is not none %}
+              <strong>{{ r.choices[r.user_choice] }}</strong>
+            {% else %}
+              <strong>(no answer)</strong>
+            {% endif %}
+            {% if r.correct %}
+              <span class="pill ok">Correct</span>
+            {% else %}
+              <span class="pill bad">Incorrect</span>
+            {% endif %}
+          </div>
+          <div class="muted small">
+            Correct: <strong>{{ r.choices[r.answer_index] }}</strong>
+          </div>
+          <div class="explain">{{ r.explain }}</div>
+        </li>
+      {% endfor %}
+    </ol>
+  </section>
+{% endblock %}
