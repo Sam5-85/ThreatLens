@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="card">
+    <h1>Simulation: You clicked the link</h1>
+    <p class="muted">
+      In real life, clicking could take you to a malicious website. Here, we stop and teach safely.
+    </p>
+
+    <h2>What to notice in this email</h2>
+    <ul>
+      {% for rf in email.red_flags %}
+        <li>{{ rf }}</li>
+      {% endfor %}
+    </ul>
+
+    <div class="callout">
+      <strong>Safer approach:</strong> Don’t use the link in the email. Go to the official site/app yourself
+      or contact the organization using a number you already trust.
+    </div>
+
+    <div class="actions">
+      <a class="btn" href="{{ url_for('quiz_scenario', scenario=email.scenario) }}">Take the awareness quiz</a>
+      <a class="btn ghost" href="{{ url_for('index') }}">Back to inbox</a>
+    </div>
+  </section>
+{% endblock %}
