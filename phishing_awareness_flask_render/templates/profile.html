@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<section class="card">
+  <h1>Cybersecurity Awareness Assessment</h1>
+
+  <p class="muted">
+    Enter your department and role so ThreatLens can generate a tailored cybersecurity quiz.
+  </p>
+
+  <form method="POST" action="{{ url_for('start_assessment') }}">
+
+    <label>
+      Department
+      <input
+        type="text"
+        name="department"
+        placeholder="Example: HR, Finance, IT, Sales, Student Services"
+        style="width:100%; padding:12px; margin:8px 0 16px;"
+      >
+    </label>
+
+    <label>
+      Role
+      <input
+        type="text"
+        name="role"
+        placeholder="Example: Manager, Assistant, Student, Analyst"
+        style="width:100%; padding:12px; margin:8px 0 16px;"
+      >
+    </label>
+
+    <button class="btn" type="submit">
+      Start AI Assessment
+    </button>
+
+  </form>
+</section>
+
+{% endblock %}
