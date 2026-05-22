@@ -1,40 +1,194 @@
 {% extends "base.html" %}
+
 {% block content %}
-  <section class="card">
-    <h1>Your Results</h1>
-    <p class="score">Score: <strong>{{ last_score.score }}</strong> / {{ last_score.total }}</p>
 
-    <div class="actions">
-      <a class="btn" href="{{ url_for('quiz') }}">Retake quiz</a>
-      <a class="btn ghost" href="{{ url_for('index') }}">Back to inbox</a>
-    </div>
-  </section>
+<section class="card">
+  <h1>Your Results</h1>
 
-  <section class="card">
-    <h2>Review</h2>
-    <ol class="review">
-      {% for r in last_results %}
-        <li class="review-item">
-          <div class="q">{{ r.question }}</div>
-          <div class="muted small">
-            Your answer:
-            {% if r.user_choice is not none %}
-              <strong>{{ r.choices[r.user_choice] }}</strong>
-            {% else %}
-              <strong>(no answer)</strong>
-            {% endif %}
-            {% if r.correct %}
-              <span class="pill ok">Correct</span>
-            {% else %}
-              <span class="pill bad">Incorrect</span>
-            {% endif %}
-          </div>
-          <div class="muted small">
-            Correct: <strong>{{ r.choices[r.answer_index] }}</strong>
-          </div>
-          <div class="explain">{{ r.explain }}</div>
-        </li>
-      {% endfor %}
-    </ol>
-  </section>
+  <p class="score">
+    Score:
+    <strong>{{ last_score.score }}</strong>
+    /
+    {{ last_score.total }}
+  </p>
+
+  <div class="actions">
+    <a class="btn" href="{{ url_for('quiz') }}">
+      Retake quiz
+    </a>
+
+    <a class="btn ghost" href="{{ url_for('index') }}">
+      Back to inbox
+    </a>
+  </div>
+</section>
+
+
+{% if ai_feedback %}
+
+<section class="card">
+
+  <h2>AI Tailored Feedback</h2>
+
+  <p>{{ ai_feedback.summary }}</p>
+
+  <h3>Knowledge gaps</h3>
+
+  <ul>
+    {% for gap in ai_feedback.knowledge_gaps %}
+      <li>{{ gap }}</li>
+    {% endfor %}
+  </ul>
+
+  <h3>Tailored scenario</h3>
+
+  <p>{{ ai_feedback.tailored_scenario }}</p>
+
+  <h3>Risk explanation</h3>
+
+  <p>{{ ai_feedback.risk_explanation }}</p>
+
+  <h3>Warning signs</h3>
+
+  <ul>
+    {% for sign in ai_feedback.warning_signs %}
+      <li>{{ sign }}</li>
+    {% endfor %}
+  </ul>
+
+  <h3>Safe action</h3>
+
+  <p>{{ ai_feedback.safe_action }}</p>
+
+  <h3>Next practice question</h3>
+
+  <p>{{ ai_feedback.next_practice_question }}</p>
+
+</section>
+
+{% endif %}
+
+<section class="card">
+
+  <h2>Review</h2>
+
+  <ol class="review">
+
+    {% for r in last_results %}
+
+      <li class="review-item">
+
+        <div class="q">
+          {{ r.question }}
+        </div>
+
+        <div class="muted small">
+
+          Your answer:
+
+          {% if r.user_choice is not none %}
+
+            <strong>
+              {{ r.choices[r.user_choice] }}
+            </strong>
+
+          {% else %}
+
+            <strong>(no answer)</strong>
+
+          {% endif %}
+
+          {% if r.correct %}
+
+            <span class="pill ok">
+              Correct
+            </span>
+
+          {% else %}
+
+            <span class="pill bad">
+              Incorrect
+            </span>
+
+          {% endif %}
+
+        </div>
+
+        <div class="muted small">
+
+          Correct:
+
+          <strong>
+            {{ r.choices[r.answer_index] }}
+          </strong>
+
+        </div>
+
+        <div class="explain">
+          {{ r.explain }}
+        </div>
+
+      </li>
+
+    {% endfor %}
+
+  </ol>
+
+</section>
+
+<section>
+  <a class="btn" href="{{ url_for('training') }}">
+    Generate AI Training Material
+  </a>
+</section> 
+<script>
+
+document.getElementById("chat-btn").onclick = async () => {
+
+  const input = document.getElementById("chat-input");
+
+  const responseBox =
+    document.getElementById("chat-response");
+
+  responseBox.innerHTML = "Thinking...";
+
+  try {
+
+    const res = await fetch("/chat", {
+
+      method: "POST",
+
+      headers: {
+        "Content-Type": "application/json"
+      },
+
+      body: JSON.stringify({
+        message: input.value
+      })
+    });
+
+    const data = await res.json();
+
+    if(data.ok){
+
+      responseBox.innerHTML =
+        `<div class="card">${data.reply}</div>`;
+
+    } else {
+
+      responseBox.innerHTML =
+        `<div class="card">Error: ${data.error}</div>`;
+    }
+
+  } catch(err){
+
+    responseBox.innerHTML =
+      `<div class="card">Request failed</div>`;
+  }
+};
+
+</script>
+
+
+
 {% endblock %}
