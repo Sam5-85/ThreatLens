@@ -1,364 +1,422 @@
-from flask import (
-    Flask, render_template, redirect, url_for,
-    request, session, abort, jsonify, render_template_string
-)
+import json
+import os
 from datetime import datetime
 
+from flask import (
+    Flask, render_template, redirect, url_for,
+    request, session, abort, jsonify
+)
+
 app = Flask(__name__)
-app.secret_key = "change-me-in-production"  # demo only
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me-in-production")
 
-# IMPORTANT: Awareness simulator only. No credential collection.
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+USE_OPENAI = os.getenv("USE_OPENAI", "1") == "1" and bool(os.getenv("OPENAI_API_KEY"))
 
-SIMULATED_EMAILS = [
-    {
-        "id": "it-reset",
-        "scenario": "it",
-        "subject": "Action required: Password expires today",
-        "sender": "IT Support <it-support@example.com>",
-        "preview": "Your password expires today. Click to keep access.",
-        "body_html": """
-            <p>Hello,</p>
-            <p>Our records show your password will expire <strong>today</strong>.
-               To avoid interruption, please confirm your details.</p>
-            <p><a class="cta" href="{{ url_for('click_link', email_id='it-reset') }}">Confirm now</a></p>
-            <p class="fineprint">If you did not request this, ignore this email.</p>
-        """,
-        "red_flags": [
-            'Creates urgency ("expires today")',
-            "Generic greeting (\"Hello\")",
-            "Pressure to click a link immediately",
+
+TITLE_MAP = {
+    "cybersecurity": "Cybersecurity Awareness",
+}
+
+QUIZ_SCHEMA = {
+    "name": "threatlens_ai_quiz",
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "quiz": {
+                "type": "array",
+                "minItems": 5,
+                "maxItems": 5,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "id": {"type": "string"},
+                        "category": {"type": "string"},
+                        "question": {"type": "string"},
+                        "choices": {
+                            "type": "array",
+                            "minItems": 4,
+                            "maxItems": 4,
+                            "items": {"type": "string"}
+                        },
+                        "answer_index": {"type": "integer"},
+                        "explain": {"type": "string"}
+                    },
+                    "required": [
+                        "id",
+                        "category",
+                        "question",
+                        "choices",
+                        "answer_index",
+                        "explain"
+                    ]
+                }
+            }
+        },
+        "required": ["quiz"]
+    }
+}
+
+FEEDBACK_SCHEMA = {
+    "name": "threatlens_feedback",
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "summary": {"type": "string"},
+            "knowledge_gaps": {"type": "array", "items": {"type": "string"}},
+            "tailored_scenario": {"type": "string"},
+            "risk_explanation": {"type": "string"},
+            "warning_signs": {"type": "array", "items": {"type": "string"}},
+            "safe_action": {"type": "string"},
+            "next_practice_question": {"type": "string"},
+        },
+        "required": [
+            "summary",
+            "knowledge_gaps",
+            "tailored_scenario",
+            "risk_explanation",
+            "warning_signs",
+            "safe_action",
+            "next_practice_question",
         ],
     },
-    {
-        "id": "parcel",
-        "scenario": "delivery",
-        "subject": "Missed delivery — schedule redelivery",
-        "sender": "Delivery Updates <notify@example.com>",
-        "preview": "We missed you. Schedule redelivery.",
-        "body_html": """
-            <p>We attempted to deliver your parcel but couldn't complete delivery.</p>
-            <p>Please schedule a redelivery within <strong>12 hours</strong>:</p>
-            <p><a class="cta" href="{{ url_for('click_link', email_id='parcel') }}">Schedule redelivery</a></p>
-            <p class="fineprint">Reference: 8492-1120</p>
-        """,
-        "red_flags": [
-            "Unrealistic short deadline",
-            "No identifying details (carrier/order)",
-            "Encourages quick action",
-        ],
-    },
-    {
-        "id": "invoice",
-        "scenario": "finance",
-        "subject": "Invoice attached — payment overdue",
-        "sender": "Accounts <accounts@example.com>",
-        "preview": "Payment is overdue. Review invoice.",
-        "body_html": """
-            <p>Hi,</p>
-            <p>Your payment is overdue. Please review the invoice and settle immediately to avoid penalties.</p>
-            <p><a class="cta" href="{{ url_for('click_link', email_id='invoice') }}">View invoice</a></p>
-            <p class="fineprint">Thank you.</p>
-        """,
-        "red_flags": [
-            "Vague sender/organization",
-            "Threat of penalties",
-            "Pushes to click rather than use known billing channel",
-        ],
-    },
-]
+}
 
-# Scenario-based quizzes (enterprise-style)
-QUIZZES = {
-    "it": [
-        {
-            "id": "it_q1",
-            "question": "A password-expiry email asks you to click a link. What is the safest first step?",
-            "choices": [
-                "Click the link quickly to avoid lockout",
-                "Reply to the email asking if it's real",
-                "Go to the official company password portal (bookmark/known URL) or contact IT via a trusted channel",
-                "Forward to coworkers to see if they received it",
-            ],
-            "answer_index": 2,
-            "explain": "Use a trusted channel you control (known portal/phone) — not the email link."
+TRAINING_SCHEMA = {
+    "name": "threatlens_training_material",
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "title": {"type": "string"},
+            "introduction": {"type": "string"},
+            "learning_objectives": {
+                "type": "array",
+                "items": {"type": "string"}
+            },
+            "mini_lesson": {"type": "string"},
+            "example_scenario": {"type": "string"},
+            "key_takeaways": {
+                "type": "array",
+                "items": {"type": "string"}
+            },
+            "practice_questions": {
+                "type": "array",
+                "items": {"type": "string"}
+            },
+            "safe_actions": {
+                "type": "array",
+                "items": {"type": "string"}
+            }
         },
-        {
-            "id": "it_q2",
-            "question": "Which practice best reduces risk if your password is stolen?",
-            "choices": [
-                "Reusing the same password everywhere",
-                "Two-factor authentication (2FA/MFA)",
-                "Sharing passwords with teammates",
-                "Saving passwords in plain text",
-            ],
-            "answer_index": 1,
-            "explain": "MFA makes a stolen password alone less useful (though not perfect)."
-        },
-        {
-            "id": "it_q3",
-            "question": "A login page appears after clicking. What is a strong sign it might be fake?",
-            "choices": [
-                "The URL domain is slightly misspelled or unfamiliar",
-                "The page has a logo",
-                "It asks for your username",
-                "It loads quickly",
-            ],
-            "answer_index": 0,
-            "explain": "Look-alike domains (typosquatting) are a common phishing trick."
-        },
-        {
-            "id": "it_q4",
-            "question": "What should you do if you already clicked a suspicious link (best practice)?",
-            "choices": [
-                "Do nothing and hope for the best",
-                "Immediately report to IT/Security and follow their instructions",
-                "Delete the email and move on",
-                "Post it on social media",
-            ],
-            "answer_index": 1,
-            "explain": "Reporting quickly helps contain risk and protect others."
-        },
-        {
-            "id": "it_q5",
-            "question": "Which is the safest way to verify an email sender?",
-            "choices": [
-                "Trust the display name (e.g., 'IT Support')",
-                "Check the 'Reply-To' and actual address domain, and verify through official contacts",
-                "Assume internal emails are always safe",
-                "Only look at the subject line",
-            ],
-            "answer_index": 1,
-            "explain": "Phishers spoof display names; verify actual sender details and use trusted channels."
-        },
-    ],
-    "delivery": [
-        {
-            "id": "del_q1",
-            "question": "A delivery SMS/email says 'schedule within 12 hours'. What is the best response?",
-            "choices": [
-                "Click immediately",
-                "Ignore the deadline, open the courier’s official app/site yourself and check tracking",
-                "Reply with your address to confirm",
-                "Send your card details to reschedule",
-            ],
-            "answer_index": 1,
-            "explain": "Use official apps/sites you navigate to yourself. Don’t trust urgent links."
-        },
-        {
-            "id": "del_q2",
-            "question": "What is the safest way to check where a link really goes?",
-            "choices": [
-                "Click it and see",
-                "Hover (mouse) or long-press (mobile) to preview, or copy/paste into a safe checker—prefer not clicking at all",
-                "Assume short links are safe",
-                "Only look at the text color",
-            ],
-            "answer_index": 1,
-            "explain": "Previewing helps detect mismatched or suspicious URLs."
-        },
-        {
-            "id": "del_q3",
-            "question": "A QR code in an email claims you must scan to reschedule delivery. What’s a risk?",
-            "choices": [
-                "QR codes always open safe pages",
-                "QR codes can hide malicious URLs and bypass user scrutiny",
-                "QR codes can’t contain links",
-                "QR codes only work in banks",
-            ],
-            "answer_index": 1,
-            "explain": "QR phishing ('quishing') hides the URL and can lead to malicious pages."
-        },
-        {
-            "id": "del_q4",
-            "question": "Which detail is most suspicious for delivery messages?",
-            "choices": [
-                "A valid tracking number that matches your order",
-                "Carrier name matches your recent purchase",
-                "No carrier/order details but asks you to click a link",
-                "A message you expected",
-            ],
-            "answer_index": 2,
-            "explain": "Lack of verifiable details is a strong phishing red flag."
-        },
-        {
-            "id": "del_q5",
-            "question": "If you must enter details on a delivery page, what should you avoid?",
-            "choices": [
-                "Using the courier’s official app",
-                "Entering your password/card details from an unexpected link",
-                "Checking tracking from a bookmarked site",
-                "Contacting support via known numbers",
-            ],
-            "answer_index": 1,
-            "explain": "Unexpected links are a common way to steal credentials/payment info."
-        },
-    ],
-    "finance": [
-        {
-            "id": "fin_q1",
-            "question": "An email says an invoice is overdue and asks you to pay via a link. Best action?",
-            "choices": [
-                "Pay immediately to avoid penalties",
-                "Verify the request in your official finance system or via a known contact method",
-                "Reply 'Is this real?' and wait",
-                "Forward to external vendors",
-            ],
-            "answer_index": 1,
-            "explain": "Finance fraud often pressures fast payment—verify via approved systems/channels."
-        },
-        {
-            "id": "fin_q2",
-            "question": "Which is a common sign of Business Email Compromise (BEC)/invoice fraud?",
-            "choices": [
-                "Normal tone and expected process",
-                "A sudden change in bank account/payment instructions",
-                "A vendor message you were expecting",
-                "Invoices only sent through your portal",
-            ],
-            "answer_index": 1,
-            "explain": "Changing payment details is a classic BEC pattern—always verify."
-        },
-        {
-            "id": "fin_q3",
-            "question": "What control best prevents fraudulent payments?",
-            "choices": [
-                "One person approves and pays",
-                "Dual approval + vendor bank detail verification (out-of-band)",
-                "Paying from personal accounts",
-                "Ignoring approvals if urgent",
-            ],
-            "answer_index": 1,
-            "explain": "Separation of duties and out-of-band verification reduce fraud risk."
-        },
-        {
-            "id": "fin_q4",
-            "question": "A message says 'CEO needs urgent wire transfer'. What should you do?",
-            "choices": [
-                "Do it quickly; CEOs are busy",
-                "Verify using a known phone number / in-person confirmation and follow policy",
-                "Ask them to send their password to confirm identity",
-                "Only check the email signature",
-            ],
-            "answer_index": 1,
-            "explain": "CEO fraud relies on urgency—verify through trusted channels and policy."
-        },
-        {
-            "id": "fin_q5",
-            "question": "What should you report to security/finance leadership?",
-            "choices": [
-                "Only successful fraud",
-                "Any suspicious invoice/payment request, even if you didn’t act on it",
-                "Only emails with attachments",
-                "Only messages from unknown senders",
-            ],
-            "answer_index": 1,
-            "explain": "Reporting near-misses improves detection and protects others."
-        },
-    ],
+        "required": [
+            "title",
+            "introduction",
+            "learning_objectives",
+            "mini_lesson",
+            "example_scenario",
+            "key_takeaways",
+            "practice_questions",
+            "safe_actions"
+        ]
+    }
 }
 
 
-def get_email(email_id: str):
-    for e in SIMULATED_EMAILS:
-        if e["id"] == email_id:
-            return e
-    return None
 
 
-def get_quiz_for_scenario(scenario: str):
-    return QUIZZES.get(scenario)
+
+def fallback_ai_feedback(scenario, weak_categories, score, total):
+    readable = ", ".join(weak_categories) if weak_categories else "general safe behaviour"
+
+    return {
+        "summary": f"You scored {score}/{total}. Focus next on {readable}.",
+        "knowledge_gaps": weak_categories or ["reinforcement"],
+        "tailored_scenario": f"You receive another {TITLE_MAP.get(scenario, 'cybersecurity')} message with urgent wording and a link.",
+        "risk_explanation": "Attackers use urgency, confusing instructions and familiar brands to make people act before checking.",
+        "warning_signs": [
+            "Unexpected request",
+            "Urgent deadline",
+            "Link, login page or payment instruction in the message",
+        ],
+        "safe_action": "Use a known official website, app, phone number or internal reporting channel instead of the message link.",
+        "next_practice_question": "What trusted channel would you use to verify this before clicking, logging in or paying?",
+    }
 
 
+# =========================
+# OPENAI CONFIG
+# =========================
+from dotenv import load_dotenv
+
+load_dotenv()
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+OPENAI_MODEL = "gpt-4o-mini"
+
+USE_OPENAI = (
+    OPENAI_API_KEY is not None
+    and OPENAI_API_KEY.startswith("sk-")
+)
+
+def generate_ai_feedback(scenario, quiz_results, score, total):
+
+    weak_categories = sorted({
+        r["category"]
+        for r in quiz_results
+        if not r["correct"]
+    })
+
+    # Get user profile for role-based feedback
+    session_id = session.get("session_id")
+    state = APP_STATE.get(session_id, {})
+    profile = state.get("profile", {})
+
+    department = profile.get("department", "General")
+    role = profile.get("role", "Employee")
+
+    # Adaptive feedback level
+    score_ratio = score / total if total else 0
+
+    if score_ratio < 0.5:
+        feedback_level = "supportive beginner feedback"
+    elif score_ratio < 0.8:
+        feedback_level = "targeted improvement feedback"
+    else:
+        feedback_level = "advanced awareness reinforcement"
+
+    # =========================
+    # LOCAL FALLBACK
+    # =========================
+    if not USE_OPENAI:
+
+        feedback = fallback_ai_feedback(
+            scenario,
+            weak_categories,
+            score,
+            total
+        )
+
+        feedback["summary"] = (
+            "[LOCAL FALLBACK] "
+            + feedback["summary"]
+        )
+
+        return feedback
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(
+            api_key=OPENAI_API_KEY
+        )
+
+        prompt_payload = {
+            "department": department,
+            "role": role,
+            "feedback_level": feedback_level,
+
+            "scenario": scenario,
+            "audience": "non-technical adult learner",
+
+            "score": {
+                "score": score,
+                "total": total
+            },
+
+            "weak_categories": weak_categories,
+
+            "incorrect_questions": [
+                {
+                    "question": r["question"],
+
+                    "user_answer": (
+                        r["choices"][r["user_choice"]]
+                        if r["user_choice"] is not None
+                        else "No answer"
+                    ),
+
+                    "correct_answer": (
+                        r["choices"][r["answer_index"]]
+                    ),
+
+                    "category": r["category"],
+                }
+
+                for r in quiz_results
+                if not r["correct"]
+            ],
+        }
+
+        completion = client.chat.completions.create(
+
+            model=OPENAI_MODEL,
+
+            temperature=0.75,
+
+            messages=[
+
+                {
+                    "role": "system",
+
+                    "content": (
+                        "You are ThreatLens AI, a personalised cybersecurity awareness coach.\n\n"
+                        "Give role-specific feedback based on the user's department, role, quiz score, "
+                        "and incorrect answers.\n\n"
+
+                        "Rules:\n"
+                        "- Make the feedback specific to their workplace role.\n"
+                        "- Explain why their mistakes matter in their department.\n"
+                        "- Avoid generic cybersecurity advice.\n"
+                        "- Use realistic examples they may face at work.\n"
+                        "- Be supportive, not scary or judgmental.\n"
+                        "- Keep language beginner-friendly.\n"
+                        "- Focus only on defensive awareness and safe behaviour.\n"
+                        "- Give practical next steps they can actually follow.\n\n"
+
+                        "Examples:\n"
+                        "- Finance mistakes should connect to invoice fraud, payment changes, fake suppliers.\n"
+                        "- HR mistakes should connect to payroll changes, employee records, impersonation.\n"
+                        "- Sales mistakes should connect to fake leads, attachments, CRM login scams.\n"
+                        "- Managers should learn about approval pressure and executive impersonation.\n"
+                        "- Students should learn about portal, scholarship and account-reset scams.\n\n"
+
+                        "The feedback should feel personally written for this user's role and mistakes."
+                    ),
+                },
+
+                {
+                    "role": "user",
+
+                    "content": (
+                        "Generate tailored cybersecurity feedback "
+                        "using this structured data:\n"
+                        + json.dumps(prompt_payload)
+                    ),
+                },
+            ],
+
+            response_format={
+                "type": "json_schema",
+
+                "json_schema": {
+                    "name": FEEDBACK_SCHEMA["name"],
+                    "strict": True,
+                    "schema": FEEDBACK_SCHEMA["schema"],
+                },
+            },
+        )
+
+        feedback = json.loads(
+            completion.choices[0].message.content
+        )
+
+        return feedback
+
+    except Exception as exc:
+
+        feedback = fallback_ai_feedback(
+            scenario,
+            weak_categories,
+            score,
+            total
+        )
+
+        feedback["summary"] = (
+            "[OPENAI ERROR - LOCAL FALLBACK] "
+            + feedback["summary"]
+        )
+
+        feedback["debug_error"] = str(exc)
+
+        print("\n========== OPENAI ERROR ==========")
+        print(str(exc))
+        print("==================================\n")
+
+        return feedback
+    
 @app.route("/")
 def index():
-    return render_template("index.html", emails=SIMULATED_EMAILS)
+    return render_template("profile.html")
 
+@app.route("/start-assessment", methods=["POST"])
+def start_assessment():
+    department = request.form.get("department", "").strip()
+    role = request.form.get("role", "").strip()
 
-@app.route("/email/<email_id>")
-def view_email(email_id):
-    email = get_email(email_id)
-    if not email:
-        abort(404)
+    if not department:
+        department = "General"
+    if not role:
+        role = "Employee"
 
-    rendered_body = render_template_string(email["body_html"])
-    email_view = dict(email)
-    email_view["body_html"] = rendered_body
+    session_id = session.get("session_id")
+    if not session_id:
+        session_id = datetime.utcnow().isoformat()
+        session["session_id"] = session_id
 
-    return render_template("email.html", email=email_view)
+    APP_STATE[session_id] = {
+        "profile": {
+            "department": department,
+            "role": role
+        }
+    }
 
-
-@app.route("/click/<email_id>")
-def click_link(email_id):
-    email = get_email(email_id)
-    if not email:
-        abort(404)
-
-    session.setdefault("events", [])
-    session["events"].append({
-        "type": "clicked_simulated_link",
-        "email_id": email_id,
-        "scenario": email["scenario"],
-        "ts": datetime.utcnow().isoformat() + "Z",
-    })
-    session["last_scenario"] = email["scenario"]
     session.modified = True
 
-    return render_template("clicked.html", email=email)
+    return redirect(url_for("quiz_scenario", scenario="cybersecurity"))
 
-
-# Default quiz route: if user visits /quiz, send them to last scenario quiz (or IT as fallback)
 @app.route("/quiz")
 def quiz():
-    scenario = session.get("last_scenario", "it")
-    return redirect(url_for("quiz_scenario", scenario=scenario))
+    return redirect(url_for("index"))
 
-
-# Scenario quiz route
-@app.route("/quiz/<scenario>")
-def quiz_scenario(scenario):
-    quiz_data = get_quiz_for_scenario(scenario)
-    if not quiz_data:
-        abort(404)
-
-    title_map = {"it": "IT Security Quiz", "delivery": "Delivery Scam Quiz", "finance": "Finance/BEC Quiz"}
-    quiz_title = title_map.get(scenario, "Awareness Quiz")
-
-    return render_template("quiz.html", quiz=quiz_data, quiz_title=quiz_title, scenario=scenario)
-
-
-# Scenario JSON endpoint (optional for future frontend)
-@app.route("/api/quiz/<scenario>")
-def api_quiz_scenario(scenario):
-    quiz_data = get_quiz_for_scenario(scenario)
-    if not quiz_data:
-        return jsonify({"ok": False, "error": "Unknown scenario"}), 404
-
-    safe_quiz = [{k: v for k, v in q.items() if k in ("id", "question", "choices")} for q in quiz_data]
-    return jsonify({"ok": True, "scenario": scenario, "quiz": safe_quiz})
+APP_STATE = {}
 
 
 @app.route("/submit", methods=["POST"])
 def submit():
     data = request.get_json(silent=True) or {}
     answers = data.get("answers")
-    scenario = data.get("scenario")  # comes from frontend
+    scenario = data.get("scenario")
+
     if not isinstance(answers, dict) or not isinstance(scenario, str):
         return jsonify({"ok": False, "error": "Invalid payload"}), 400
 
-    quiz_data = get_quiz_for_scenario(scenario)
-    if not quiz_data:
-        return jsonify({"ok": False, "error": "Unknown scenario"}), 400
+    session_id = session.get("session_id")
+    state = APP_STATE.get(session_id, {})
+
+    quiz_data = state.get("active_quiz")
+    active_scenario = state.get("active_scenario")
+
+    if not quiz_data or active_scenario != scenario:
+        return jsonify({
+            "ok": False,
+            "error": "Quiz session expired. Please retake the quiz."
+        }), 400
 
     score = 0
     results = []
+
     for q in quiz_data:
         qid = q["id"]
-        user_choice = answers.get(qid)
-        correct = (user_choice == q["answer_index"])
+        raw_choice = answers.get(qid)
+
+        try:
+            user_choice = int(raw_choice) if raw_choice is not None else None
+        except (TypeError, ValueError):
+            user_choice = None
+
+        correct = user_choice == q["answer_index"]
+
         if correct:
             score += 1
+
         results.append({
             "id": qid,
+            "category": q.get("category", "general"),
             "question": q["question"],
             "choices": q["choices"],
             "user_choice": user_choice,
@@ -367,36 +425,452 @@ def submit():
             "explain": q["explain"],
         })
 
-    # store last results per scenario
-    session["last_score"] = {"score": score, "total": len(quiz_data), "scenario": scenario}
-    session["last_results"] = results
-    session.modified = True
+    ai_feedback = generate_ai_feedback(scenario, results, score, len(quiz_data))
+
+    state["last_score"] = {
+        "score": score,
+        "total": len(quiz_data),
+        "scenario": scenario,
+    }
+    state["last_results"] = results
+    state["ai_feedback"] = ai_feedback
+
+    APP_STATE[session_id] = state
 
     return jsonify({"ok": True, "score": score, "total": len(quiz_data)})
 
-
 @app.route("/results")
 def results():
-    last_score = session.get("last_score")
-    last_results = session.get("last_results")
+    session_id = session.get("session_id")
+    state = APP_STATE.get(session_id, {})
+
+    last_score = state.get("last_score")
+    last_results = state.get("last_results")
+
     if not last_score or not last_results:
         return redirect(url_for("quiz"))
 
-    title_map = {"it": "IT Security Results", "delivery": "Delivery Scam Results", "finance": "Finance/BEC Results"}
-    results_title = title_map.get(last_score.get("scenario"), "Your Results")
+    scenario = last_score.get("scenario")
 
     return render_template(
         "result.html",
         last_score=last_score,
         last_results=last_results,
-        results_title=results_title
+        ai_feedback=state.get("ai_feedback"),
+        results_title=f"{TITLE_MAP.get(scenario, 'Awareness')} Results",
     )
-
 
 @app.route("/about")
 def about():
     return render_template("about.html")
 
+@app.route("/chat", methods=["POST"])
+def chat():
 
-if __name__ == "__main__":
-    app.run(debug=True)
+    data = request.get_json(silent=True) or {}
+    message = data.get("message", "").strip()
+
+    if not message:
+        return jsonify({
+            "ok": False,
+            "error": "No message"
+        }), 400
+
+    try:
+        from openai import OpenAI
+
+        session_id = session.get("session_id")
+        state = APP_STATE.get(session_id, {})
+
+        profile = state.get("profile", {})
+        ai_feedback = state.get("ai_feedback", {})
+        last_score = state.get("last_score", {})
+        training_material = state.get("training_material", {})
+
+        chat_context = {
+            "department": profile.get("department", "General"),
+            "role": profile.get("role", "Employee"),
+            "knowledge_gaps": ai_feedback.get("knowledge_gaps", []),
+            "last_score": last_score,
+            "training_title": training_material.get("title", "")
+        }
+
+        chat_history = state.get("chat_history", [])
+        chat_history = chat_history[-6:]
+
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        completion = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            temperature=0.5,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are ThreatLens AI, a cybersecurity awareness assistant.\n\n"
+                        "You ONLY answer questions related to cybersecurity awareness, online safety, "
+                        "phishing, scams, passwords, MFA, suspicious links, social engineering, "
+                        "safe data handling, privacy, workplace security, and the user's training content.\n\n"
+                        "Use the user's department, role, quiz score, knowledge gaps, and previous chat context "
+                        "to personalise answers.\n\n"
+                        "If the user asks something unrelated, politely refuse and redirect them back "
+                        "to cybersecurity learning.\n\n"
+                        "Keep answers short, safe, beginner-friendly, and conversational.\n"
+                        "Do not answer general knowledge questions, trivia, politics, math, travel, cooking, coding, "
+                        "or unrelated topics."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "User training context:\n"
+                        + json.dumps(chat_context)
+                    ),
+                },
+                *chat_history,
+                {
+                    "role": "user",
+                    "content": message,
+                },
+            ],
+        )
+
+        reply = completion.choices[0].message.content
+
+        chat_history.append({
+            "role": "user",
+            "content": message
+        })
+
+        chat_history.append({
+            "role": "assistant",
+            "content": reply
+        })
+
+        state["chat_history"] = chat_history[-10:]
+        APP_STATE[session_id] = state
+
+        return jsonify({
+            "ok": True,
+            "reply": reply
+        })
+    
+    except Exception as exc:
+        return jsonify({
+            "ok": False,
+            "error": str(exc)
+        }), 500
+        
+                
+def generate_training_material():
+    session_id = session.get("session_id")
+    state = APP_STATE.get(session_id, {})
+
+    last_score = state.get("last_score")
+    ai_feedback = state.get("ai_feedback")
+    last_results = state.get("last_results", [])
+    profile = state.get("profile", {})
+
+    if not last_score or not ai_feedback:
+        return None
+
+    score_ratio = last_score.get("score", 0) / last_score.get("total", 1)
+    
+    if score_ratio < 0.5:
+        difficulty = "beginner"
+    elif score_ratio < 0.8:
+        difficulty = "intermediate"
+    else:
+        difficulty = "advanced awareness reinforcement"
+
+    department = profile.get("department", "General")
+    role = profile.get("role", "Employee")
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        prompt_payload = {
+            "department": department,
+            "role": role,
+            "training_level": difficulty,
+
+            "scenario": last_score.get("scenario"),
+
+            "score": {
+                "score": last_score.get("score"),
+                "total": last_score.get("total")
+            },
+
+            "knowledge_gaps": ai_feedback.get("knowledge_gaps", []),
+
+            "risk_explanation": ai_feedback.get("risk_explanation", ""),
+
+            "safe_action": ai_feedback.get("safe_action", ""),
+
+            "quiz_review": [
+                {
+                    "question": r["question"],
+                    "correct": r["correct"],
+                    "category": r.get("category", "general"),
+                    "explanation": r.get("explain", "")
+                }
+                for r in last_results
+            ]
+        }
+
+        completion = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        temperature=0.75,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are ThreatLens AI, an adaptive cybersecurity awareness coach.\n\n"
+                    "Create personalised, defensive cybersecurity training for non-technical users.\n\n"
+                    "Rules:\n"
+                    "- Tailor the lesson to the user's department and role.\n"
+                    "- Use the user's quiz score and mistakes to decide what to teach.\n"
+                    "- Focus on realistic workplace situations they may actually face.\n"
+                    "- Explain why their weak areas are risky.\n"
+                    "- Give practical safe actions, not technical hacking details.\n"
+                    "- Avoid generic cybersecurity textbook content.\n"
+                    "- Keep the tone supportive, clear and beginner-friendly.\n"
+                    "- Make examples specific to the user's job context.\n\n"
+                    "Examples of tailoring:\n"
+                    "- HR: payroll change scams, employee impersonation, sensitive staff data.\n"
+                    "- Finance: invoice fraud, payment approval scams, fake supplier updates.\n"
+                    "- Sales: fake customer attachments, CRM login scams, malicious proposals.\n"
+                    "- Education: student portal scams, fake scholarship links, account reset requests.\n"
+                    "- Healthcare: patient privacy, fake medical record requests, phishing emails.\n"
+                    "- Managers: urgent approval scams, executive impersonation, data-sharing pressure.\n"
+                    "- Customer support: emotional manipulation, fake account ownership claims.\n\n"
+                    "The final training must feel like it was written specifically for this user."
+                )
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Create a personalised cybersecurity training lesson using this structured data:\n\n"
+                    + json.dumps(prompt_payload)
+                )
+            }
+        ],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": TRAINING_SCHEMA["name"],
+                "strict": True,
+                "schema": TRAINING_SCHEMA["schema"]
+            }
+        }
+    )
+
+        return json.loads(completion.choices[0].message.content)
+
+    except Exception as exc:
+        print("Training generation error:", str(exc))
+        return {
+            "title": "Local Training Material",
+            "introduction": "This lesson was generated locally because AI training generation was unavailable.",
+            "learning_objectives": [
+                "Recognise suspicious messages",
+                "Verify links safely",
+                "Use trusted channels before acting"
+            ],
+            "mini_lesson": "Cyber attackers often use urgency, fear and familiar-looking brands to make people click quickly. A safer approach is to pause, check the sender, avoid unexpected links, and use official websites or apps.",
+            "example_scenario": "You receive an urgent message saying your account will be locked unless you click a link. Instead of clicking, you open the official website yourself or contact support using a trusted number.",
+            "key_takeaways": [
+                "Do not trust urgent links automatically",
+                "Check the real sender and domain",
+                "Use official apps or websites",
+                "Report suspicious messages"
+            ],
+            "practice_questions": [
+                "What should you check before clicking a link?",
+                "Why is urgency a warning sign?",
+                "How can you verify a message safely?"
+            ],
+            "safe_actions": [
+                "Pause before clicking",
+                "Use a trusted official channel",
+                "Report suspicious messages"
+            ]
+        }
+
+
+@app.route("/quiz/<scenario>")
+def quiz_scenario(scenario):
+    quiz_data = generate_ai_quiz(scenario)
+
+    if not quiz_data:
+        abort(404)
+
+    session_id = session.get("session_id")
+    if not session_id:
+        session_id = datetime.utcnow().isoformat()
+        session["session_id"] = session_id
+
+    state = APP_STATE.get(session_id, {})
+    state["active_quiz"] = quiz_data
+    state["active_scenario"] = scenario
+    APP_STATE[session_id] = state
+
+    session.modified = True
+
+    safe_quiz = [
+        {k: v for k, v in q.items() if k in ("id", "question", "choices")}
+        for q in quiz_data
+    ]
+
+    return render_template(
+        "quiz.html",
+        quiz=safe_quiz,
+        quiz_title=f"AI Generated {TITLE_MAP.get(scenario, 'Awareness')} Quiz",
+        scenario=scenario,
+    )
+    
+@app.route("/training")
+def training():
+    session_id = session.get("session_id")
+    state = APP_STATE.get(session_id, {})
+
+    material = generate_training_material()
+
+    if not material:
+        return redirect(url_for("results"))
+
+    state["training_material"] = material
+    APP_STATE[session_id] = state
+
+    return render_template(
+        "training.html",
+        material=material
+    )
+    
+def generate_ai_quiz(scenario):
+    fallback_quiz = None
+    session_id = session.get("session_id")
+    state = APP_STATE.get(session_id, {})
+    profile = state.get("profile", {})
+
+    department = profile.get("department", "General")
+    role = profile.get("role", "Employee")
+
+    if not USE_OPENAI:
+        return fallback_quiz
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        prompt_payload = {
+            "scenario": "cybersecurity awareness",
+            "department": department,
+            "role": role,
+            "audience": "non-technical adult learner",
+            "requirement": (
+                "Generate 5 beginner-friendly multiple-choice cybersecurity awareness questions "
+                "tailored to the user's department and role."
+            ),
+            "allowed_topics": [
+                "phishing recognition",
+                "link safety",
+                "unsafe login pages",
+                "password and MFA safety",
+                "incident reporting",
+                "social engineering",
+                "payment verification",
+                "safe handling of work data"
+            ]
+        }
+
+        completion = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            temperature=0.8,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are ThreatLens AI, an expert cybersecurity awareness trainer "
+                        "for workplace employees and students.\n\n"
+
+                        "Your job is to create realistic, role-specific cybersecurity "
+                        "awareness quiz questions.\n\n"
+
+                        "IMPORTANT RULES:\n"
+                        "- Questions MUST feel realistic for the user's actual department and role.\n"
+                        "- Avoid generic IT-only cybersecurity questions unless the role is IT.\n"
+                        "- Use believable workplace scenarios, communication styles and workflows.\n"
+                        "- Focus on human decision-making, social engineering and safe behaviour.\n"
+                        "- Questions should sound like situations the employee could genuinely face.\n"
+                        "- Include department-specific risks.\n"
+                        "- Make scenarios practical, modern and believable.\n"
+                        "- Avoid repetitive password-only questions.\n"
+                        "- Do not generate highly technical hacking content.\n"
+                        "- Keep language beginner-friendly.\n\n"
+
+                        "EXAMPLES:\n"
+                        "- HR staff → fake employee payroll update requests\n"
+                        "- Finance staff → invoice fraud and urgent transfer scams\n"
+                        "- Sales staff → fake customer attachments and CRM login scams\n"
+                        "- Students → fake scholarship or portal login emails\n"
+                        "- Healthcare → patient record phishing and privacy risks\n"
+                        "- Managers → impersonation and urgent approval scams\n"
+                        "- Customer service → angry-customer social engineering attempts\n"
+                        "- Remote workers → MFA fatigue and fake VPN/login pages\n\n"
+
+                        "Each question must:\n"
+                        "- contain a short realistic scenario\n"
+                        "- test judgment and safe behaviour\n"
+                        "- include exactly 4 choices\n"
+                        "- have one clearly best answer\n"
+                        "- explain WHY the correct answer is safest"
+                    )
+                },
+
+                {
+                    "role": "user",
+                    "content": (
+                        f"Generate a cybersecurity awareness quiz for:\n\n"
+                        f"Department: {department}\n"
+                        f"Role: {role}\n\n"
+
+                        "Requirements:\n"
+                        "- Create 5 unique multiple choice questions\n"
+                        "- Tailor every question to this specific role and department\n"
+                        "- Include realistic workplace situations\n"
+                        "- Avoid generic cybersecurity trivia\n"
+                        "- Make scenarios immersive and believable\n"
+                        "- Include phishing, social engineering, unsafe links, data handling, "
+                        "verification and scam awareness where appropriate\n"
+                        "- Questions should feel like interactive workplace training"
+                    )
+                }
+            ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": QUIZ_SCHEMA["name"],
+                    "strict": True,
+                    "schema": QUIZ_SCHEMA["schema"]
+                }
+            }
+        )
+
+        data = json.loads(completion.choices[0].message.content)
+        quiz = data["quiz"]
+
+        for i, q in enumerate(quiz):
+            q["id"] = f"ai_{scenario}_{i + 1}"
+
+        return quiz
+
+    except Exception as exc:
+        print("AI quiz generation error:", str(exc))
+        return fallback_quiz
+    
+    
+    
