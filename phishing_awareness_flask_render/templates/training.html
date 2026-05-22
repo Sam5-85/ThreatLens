@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<section class="card">
+  <h1>{{ material.title }}</h1>
+  <p class="muted">{{ material.introduction }}</p>
+</section>
+
+<section class="card">
+  <h2>Learning objectives</h2>
+  <ul>
+    {% for item in material.learning_objectives %}
+      <li>{{ item }}</li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="card">
+  <h2>Mini lesson</h2>
+  <p>{{ material.mini_lesson }}</p>
+</section>
+
+<section class="card">
+  <h2>Example scenario</h2>
+  <p>{{ material.example_scenario }}</p>
+</section>
+
+<section class="card">
+  <h2>Key takeaways</h2>
+  <ul>
+    {% for item in material.key_takeaways %}
+      <li>{{ item }}</li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="card">
+  <h2>Practice questions</h2>
+  <ol>
+    {% for q in material.practice_questions %}
+      <li>{{ q }}</li>
+    {% endfor %}
+  </ol>
+</section>
+
+<section class="card">
+  <h2>Safe actions</h2>
+  <ul>
+    {% for action in material.safe_actions %}
+      <li>{{ action }}</li>
+    {% endfor %}
+  </ul>
+
+  <div class="actions">
+    <a class="btn" href="{{ url_for('results') }}">Back to results</a>
+    <a class="btn ghost" href="{{ url_for('quiz') }}">Retake quiz</a>
+  </div>
+</section>
+
+<section class="card">
+    <h2>Ask ThreatLens AI</h2>
+  
+    <input
+      id="chat-input"
+      type="text"
+      placeholder="Ask about phishing, scams, passwords..."
+      style="width:100%; padding:12px; margin-bottom:12px;"
+    >
+  
+    <button id="chat-btn" class="btn">
+      Ask AI
+    </button>
+  
+    <div id="chat-response" style="margin-top:16px;"></div>
+  </section>
+  
+  <script>
+  document.getElementById("chat-btn").onclick = async () => {
+    const input = document.getElementById("chat-input");
+    const responseBox = document.getElementById("chat-response");
+  
+    responseBox.innerHTML = "Thinking...";
+  
+    const res = await fetch("/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        message: input.value
+      })
+    });
+  
+    const data = await res.json();
+  
+    if (data.ok) {
+      responseBox.innerHTML = `<div class="card">${data.reply}</div>`;
+    } else {
+      responseBox.innerHTML = `<div class="card">Error: ${data.error}</div>`;
+    }
+  };
+  </script>
+{% endblock %}
