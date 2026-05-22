@@ -2,8 +2,9 @@
 {% block content %}
   <section class="card">
     <h1>{{ quiz_title if quiz_title else "Awareness Quiz" }}</h1>
-    <p class="muted">Answer the questions. Your results are stored only in your browser session.</p>
-
+    <p class="muted">
+      Questions are tailored to your role and department.
+    </p>
     <div id="quiz-app"
          data-quiz='{{ quiz | tojson }}'
          data-scenario='{{ scenario if scenario else "" }}'
